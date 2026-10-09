@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Captioner – Tamil & English subtitles</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;700;800&family=Noto+Sans+Tamil:wght@400;600&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#e8ecf1;--panel:#fff;--ink:#14202e;--muted:#5b6b7d;--line:#d3dae3;--accent:#2b50e6;--cap:#ffd60a}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 "Hanken Grotesk",system-ui,sans-serif}
+.ta{font-family:"Noto Sans Tamil","Hanken Grotesk",sans-serif}
+header{padding:20px 32px;font-weight:800;font-size:20px;letter-spacing:-.01em}
+main{max-width:1180px;margin:0 auto;padding:0 24px 48px}
+.drop{margin:8vh auto 0;max-width:640px;background:var(--panel);border:2px dashed #9fb0c6;border-radius:14px;padding:48px 32px;text-align:center}
+.drop.over{border-color:var(--accent);background:#f5f8ff}
+.drop h1{margin:0 0 8px;font-size:30px;letter-spacing:-.02em}
+.drop p{margin:0;color:var(--muted)}
+.pick{margin:22px 0 4px}.big{padding:13px 30px;font-size:17px}.engine{margin-top:14px;font-size:13px;color:var(--muted)}
+.opts{margin-top:20px;display:flex;gap:10px;justify-content:center;align-items:center;color:var(--muted)}
+select,input,textarea,button{font:inherit;color:inherit}
+select{padding:6px 10px;border:1px solid var(--line);border-radius:8px;background:#fff}
+.work{display:none;grid-template-columns:minmax(0,1.15fr) minmax(0,1fr);gap:24px;align-items:start}
+.stage{position:sticky;top:16px}
+.screen{position:relative;background:#000;border-radius:12px;overflow:hidden}
+video{display:block;width:100%;max-height:62vh}
+.overlay{position:absolute;left:5%;right:5%;bottom:12%;text-align:center;color:var(--cap);font-weight:600;font-size:clamp(16px,2.2vw,26px);line-height:1.35;text-shadow:0 0 4px #000,0 2px 6px #000;pointer-events:none}
+.bar{height:6px;background:var(--line);border-radius:3px;margin:14px 0 6px;overflow:hidden}
+.bar i{display:block;height:100%;width:0;background:var(--accent);transition:width .4s}
+.status{color:var(--muted);font-size:14px;min-height:21px}
+.actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}
+button{border:1px solid var(--ink);background:#fff;padding:9px 16px;border-radius:8px;font-weight:700;cursor:pointer}
+button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+button:disabled{opacity:.45;cursor:not-allowed}
+button:focus-visible,textarea:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+.list{background:var(--panel);border-radius:12px;max-height:84vh;overflow:auto;padding:8px}
+.seg{display:grid;grid-template-columns:1fr auto;gap:6px 10px;padding:10px;border-radius:8px;border:2px solid transparent}
+.seg.active{border-color:var(--accent);background:#f5f8ff}
+.seg textarea{grid-column:1/3;width:100%;resize:vertical;min-height:48px;border:1px solid var(--line);border-radius:6px;padding:6px 8px;font-size:16px}
+.times{display:flex;gap:6px;align-items:center;color:var(--muted);font-size:13px}
+.times input{width:76px;padding:3px 6px;border:1px solid var(--line);border-radius:6px}
+.seg .del{border:none;padding:2px 8px;font-size:18px;color:var(--muted)}
+.empty{padding:24px;color:var(--muted);text-align:center}
+@media(max-width:860px){.work{grid-template-columns:1fr}.stage{position:static}}
+@media(prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<header>Captioner</header>
+<main>
+  <div class="drop" id="drop">
+    <h1>Add your video</h1>
+    <p>Tamil, English or a mix. Drag it here or choose a file.</p>
+    <div class="pick"><button class="primary big" id="choose" type="button">Choose video</button></div>
+    <div class="opts">Spoken language
+      <select id="lang"><option value="">Auto-detect</option><option value="ta">Tamil</option><option value="en">English</option></select>
+    </div>
+    <div class="engine" id="engine"></div>
+    <input id="file" type="file" accept="video/*,audio/*" hidden>
+  </div>
+
+  <section class="work" id="work">
+    <div class="stage">
+      <div class="screen"><video id="vid" controls></video><div class="overlay ta" id="ov"></div></div>
+      <div class="bar"><i id="prog"></i></div>
+      <div class="status" id="status"></div>
+      <div class="actions">
+        <button class="primary" id="txt" disabled>Download .txt</button>
+        <button id="srt" disabled>Download .srt</button>
+        <button id="vtt" disabled>Download .vtt</button>
+        <button id="burn" disabled>Burn into video</button>
+        <button id="again">New video</button>
+      </div>
+    </div>
+    <div class="list" id="list"><div class="empty">Captions will appear here.</div></div>
+  </section>
+</main>
+
+<script>
+const $=id=>document.getElementById(id);
+let jobId=null, segs=[], timer=null, done=false, fileName="captions";
+const vid=$("vid"), list=$("list");
+
+fetch("/api/info").then(r=>r.json()).then(i=>{$("engine").textContent=i.engine==="groq"?"Fast mode: cloud large-v3 ("+i.model+")":"Local mode: "+i.model+" model on this PC (slower). Set GROQ_API_KEY for results in seconds."}).catch(()=>{});
+// ---------- upload ----------
+const drop=$("drop");
+["dragover","dragenter"].forEach(e=>drop.addEventListener(e,ev=>{ev.preventDefault();drop.classList.add("over")}));
+["dragleave","drop"].forEach(e=>drop.addEventListener(e,ev=>{ev.preventDefault();drop.classList.remove("over")}));
+drop.addEventListener("drop",ev=>{if(ev.dataTransfer.files[0])start(ev.dataTransfer.files[0])});
+$("choose").onclick=()=>$("file").click();
+$("file").addEventListener("change",e=>{if(e.target.files[0])start(e.target.files[0])});
+
+async function start(file){
+  fileName=file.name.replace(/\.[^.]+$/,"");
+  vid.src=URL.createObjectURL(file);
+  drop.style.display="none"; $("work").style.display="grid";
+  list.innerHTML='<div class="empty">Uploading…</div>'; $("status").textContent="Uploading…";
+  const fd=new FormData(); fd.append("video",file); fd.append("language",$("lang").value);
+  const x=new XMLHttpRequest(); x.open("POST","/api/upload");
+  x.upload.onprogress=e=>{if(e.lengthComputable){const pc=e.loaded/e.total*100;$("prog").style.width=pc+"%";$("status").textContent="Uploading… "+Math.round(pc)+"%"}};
+  x.onload=()=>{
+    let j={};try{j=JSON.parse(x.responseText)}catch(_){}
+    if(x.status!==200){$("status").textContent="Upload failed: "+(j.error||x.status);return}
+    jobId=j.job;segs=[];done=false;$("prog").style.width="0";poll();
+  };
+  x.onerror=()=>{$("status").textContent="Upload failed. Is the server still running?"};
+  x.send(fd);
+}
+
+// ---------- polling ----------
+function poll(){
+  clearInterval(timer);
+  timer=setInterval(async()=>{
+    const j=await (await fetch("/api/job/"+jobId)).json();
+    if(j.error&&j.status!=="error"){return}
+    if(segs.length===0&&j.segments.length){list.innerHTML="";$("txt").disabled=false}
+    for(let i=segs.length;i<j.segments.length;i++){segs.push(j.segments[i]);list.appendChild(row(i))}
+    const last=segs.length?segs[segs.length-1].end:0;
+    if(j.duration) $("prog").style.width=Math.min(100,last/j.duration*100)+"%";
+    const names={queued:"Starting…",extracting:"Reading audio…",loading:"Loading the model…",transcribing:"Writing captions…"};
+    if(j.status==="done"){
+      clearInterval(timer);done=true;$("prog").style.width="100%";
+      $("status").textContent=`Done. Detected language: ${j.language}. A .txt copy was saved. Fix anything on the right, then download .srt.`;
+      ["txt","srt","vtt","burn"].forEach(id=>$(id).disabled=false);
+      if(segs.length) downloadTxt();
+      if(!segs.length) list.innerHTML='<div class="empty">No speech found in this video.</div>';
+    }else if(j.status==="error"){
+      clearInterval(timer);$("status").textContent="Failed: "+j.error;
+    }else $("status").textContent=names[j.status]||j.status;
+  },1000);
+}
+
+// ---------- editor ----------
+function row(i){
+  const s=segs[i], d=document.createElement("div"); d.className="seg"; d.dataset.i=i;
+  d.innerHTML=`<div class="times"><input type="number" step="0.1" min="0" value="${s.start}" aria-label="Start seconds"> → <input type="number" step="0.1" min="0" value="${s.end}" aria-label="End seconds"> sec</div>
+  <button class="del" title="Delete caption" aria-label="Delete caption">×</button>
+  <textarea class="ta" rows="2" aria-label="Caption text"></textarea>`;
+  const [a,b]=d.querySelectorAll("input"), t=d.querySelector("textarea");
+  t.value=s.text;
+  a.oninput=()=>s.start=parseFloat(a.value)||0;
+  b.oninput=()=>s.end=parseFloat(b.value)||0;
+  t.oninput=()=>{s.text=t.value;show()};
+  d.querySelector(".del").onclick=()=>{segs.splice(segs.indexOf(s),1);d.remove();show()};
+  d.addEventListener("click",e=>{if(e.target.tagName!=="BUTTON"&&e.target.tagName!=="INPUT"){vid.currentTime=s.start}});
+  d._s=s; return d;
+}
+function show(){
+  const t=vid.currentTime, cur=segs.find(s=>t>=s.start&&t<=s.end);
+  $("ov").textContent=cur?cur.text:"";
+  list.querySelectorAll(".seg").forEach(el=>{
+    const on=el._s===cur; if(on&&!el.classList.contains("active")&&!list.contains(document.activeElement)) el.scrollIntoView({block:"nearest"});
+    el.classList.toggle("active",on);
+  });
+}
+vid.addEventListener("timeupdate",show); vid.addEventListener("seeked",show);
+
+// ---------- export ----------
+const pad=(n,l=2)=>String(n).padStart(l,"0");
+function stamp(t,sep){const ms=Math.round(t*1000),h=Math.floor(ms/3600000),m=Math.floor(ms%3600000/60000),s=Math.floor(ms%60000/1000);return `${pad(h)}:${pad(m)}:${pad(s)}${sep}${pad(ms%1000,3)}`}
+const sorted=()=>[...segs].sort((a,b)=>a.start-b.start);
+function srt(){return sorted().map((s,i)=>`${i+1}\n${stamp(s.start,",")} --> ${stamp(s.end,",")}\n${s.text}\n`).join("\n")}
+function vtt(){return "WEBVTT\n\n"+sorted().map(s=>`${stamp(s.start,".")} --> ${stamp(s.end,".")}\n${s.text}\n`).join("\n")}
+function save(blob,name){const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),5000)}
+function txt(){return sorted().map(s=>s.text).join("\n")}
+function downloadTxt(){save(new Blob([txt()],{type:"text/plain;charset=utf-8"}),fileName+".txt")}
+$("txt").onclick=downloadTxt;
+$("srt").onclick=()=>save(new Blob([srt()],{type:"text/plain;charset=utf-8"}),fileName+".srt");
+$("vtt").onclick=()=>save(new Blob([vtt()],{type:"text/vtt;charset=utf-8"}),fileName+".vtt");
+$("burn").onclick=async()=>{
+  const b=$("burn"); b.disabled=true; b.textContent="Rendering…"; $("status").textContent="Burning captions into the video. This can take a minute.";
+  try{
+    const r=await fetch("/api/burn",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({job:jobId,segments:sorted()})});
+    if(!r.ok) throw new Error((await r.json()).error);
+    save(await r.blob(),fileName+"-captioned.mp4"); $("status").textContent="Captioned video downloaded.";
+  }catch(e){$("status").textContent="Burn failed: "+e.message}
+  b.disabled=false; b.textContent="Burn into video";
+};
+$("again").onclick=()=>location.reload();
+</script>
+</body>
+</html>
